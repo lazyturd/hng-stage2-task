@@ -1,7 +1,8 @@
 # Stage 1: Build
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 WORKDIR /app
 COPY requirements.txt .
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Production

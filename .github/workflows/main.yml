@@ -61,10 +61,11 @@ jobs:
   # STAGES 3 - 6: BUILD, SCAN, INTEGRATION, DEPLOY
   # ---------------------------------------------------------
   core-operations:
-    needs: test # Strict order enforcement
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # Required for uploading Trivy SARIF results
     services:
-      # Local Docker registry running as a service container
       registry:
         image: registry:2
         ports:

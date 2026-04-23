@@ -1,8 +1,7 @@
 # Stage 1: Build
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim AS builder
 WORKDIR /app
 COPY requirements.txt .
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Production
@@ -13,11 +12,8 @@ COPY --from=builder /root/.local /home/appuser/.local
 COPY . .
 RUN chown -R appuser:devops /app
 USER appuser
-
 ENV PATH=/home/appuser/.local/bin:$PATH
-EXPOSE 8000
-
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')" || exit 1
-
+EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

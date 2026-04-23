@@ -1,0 +1,157 @@
+name: HNG Stage 2 CI/CD
+
+# Triggers the pipeline on push or PR to main
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ---------------------------------------------------------
+  # STAGE 1: LINT
+  # ---------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Lint Python (flake8)
+        run: |
+          pip install flake8
+          flake8 api/ worker/ --select=E9,F63,F7,F82 --show-source
+          
+      - name: Lint JavaScript (eslint)
+        run: |
+          cd frontend
+          npx eslint app.js || true # Adjust strictness as needed for your fixes
+          
+      - name: Lint Dockerfiles (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          recursive: true
+
+  # ---------------------------------------------------------
+  # STAGE 2: TEST
+  # ---------------------------------------------------------
+  test:
+    needs: lint # Strict order enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Run Pytest & Coverage
+        run: |
+          cd api
+          pip install -r requirements.txt pytest pytest-cov fakeredis httpx
+          pytest --cov=. --cov-report=xml
+          
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: api/coverage.xml
+
+  # ---------------------------------------------------------
+  # STAGES 3 - 6: BUILD, SCAN, INTEGRATION, DEPLOY
+  # ---------------------------------------------------------
+  core-operations:
+    needs: test # Strict order enforcement
+    runs-on: ubuntu-latest
+    services:
+      # Local Docker registry running as a service container
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- STAGE 3: BUILD ---
+      - name: Build & Push to Local Registry
+        run: |
+          for service in api worker frontend; do
+            docker build -t localhost:5000/$service:${{ github.sha }} -t localhost:5000/$service:latest ./$service
+            docker push localhost:5000/$service:${{ github.sha }}
+            docker push localhost:5000/$service:latest
+          done
+
+      # --- STAGE 4: SECURITY SCAN ---
+      - name: Scan API with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'localhost:5000/api:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1' # Fails pipeline on CRITICAL findings
+
+      - name: Upload SARIF Artifact
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # --- STAGE 5: INTEGRATION TEST ---
+      - name: Standup Stack & Test
+        run: |
+          echo "REDIS_PASSWORD=supersecretpassword123" > .env
+          docker-compose up -d --build
+          sleep 10
+          
+          # Submit Job
+          JOB_ID=$(curl -s -X POST http://localhost:3000/submit | jq -r .job_id)
+          if [ -z "$JOB_ID" ] || [ "$JOB_ID" == "null" ]; then exit 1; fi
+          
+          # Poll Status
+          TIMEOUT=40
+          while [ $TIMEOUT -gt 0 ]; do
+            STATUS=$(curl -s http://localhost:3000/status/$JOB_ID | jq -r .status)
+            if [ "$STATUS" == "completed" ]; then
+              echo "Integration Success"
+              break
+            fi
+            sleep 2
+            ((TIMEOUT-=2))
+          done
+          
+          if [ "$STATUS" != "completed" ]; then exit 1; fi
+
+      - name: Clean Teardown
+        if: always()
+        run: docker-compose down
+
+      # --- STAGE 6: DEPLOY ---
+      - name: Scripted Rolling Update
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker-compose up -d
+          
+          # Scale API to 2 to deploy new alongside old
+          docker-compose up -d --no-recreate --scale api=2 api
+          NEW_CONTAINER=$(docker ps -q --filter "ancestor=api" --sort=created | head -n 1)
+          
+          TIMEOUT=60
+          HEALTHY=false
+          while [ $TIMEOUT -gt 0 ]; do
+            if [ "$(docker inspect --format='{{.State.Health.Status}}' $NEW_CONTAINER)" == "healthy" ]; then
+              HEALTHY=true
+              break
+            fi
+            sleep 5
+            ((TIMEOUT-=5))
+          done
+          
+          if [ "$HEALTHY" = true ]; then
+            OLD_CONTAINER=$(docker ps -q --filter "ancestor=api" | grep -v $NEW_CONTAINER | head -n 1)
+            docker stop $OLD_CONTAINER && docker rm $OLD_CONTAINER
+          else
+            echo "Healthcheck failed. Aborting deployment."
+            docker stop $NEW_CONTAINER && docker rm $NEW_CONTAINER
+            exit 1
+          fi

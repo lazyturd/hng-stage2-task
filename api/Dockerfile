@@ -2,14 +2,13 @@
 FROM python:3.11-slim-bookworm AS builder
 WORKDIR /app
 COPY requirements.txt .
-# FIX: Upgrade core Python packaging tools to patch known CVEs
-RUN pip install --upgrade pip setuptools wheel
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Production
 FROM python:3.11-slim-bookworm
-# FIX: Use dist-upgrade to catch packages that standard upgrade holds back
-RUN apt-get update && apt-get dist-upgrade -y && rm -rf /var/lib/apt/lists/*
+# Patch critical OS vulnerabilities
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# Create non-root user
 RUN groupadd -r devops && useradd -r -g devops appuser
 WORKDIR /app
 COPY --from=builder /root/.local /home/appuser/.local

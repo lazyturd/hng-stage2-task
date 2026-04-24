@@ -79,6 +79,15 @@ jobs:
             docker push localhost:5000/$service:latest
           done
 
+      - name: Debug Trivy (Print Table to Console)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'localhost:5000/api:${{ github.sha }}'
+          format: 'table'
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+          exit-code: '0' # 0 means it prints but won't crash the pipeline her
+
       - name: Trivy Scan
         uses: aquasecurity/trivy-action@master
         with:

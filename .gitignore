@@ -1,15 +1,7 @@
-# Secrets
 .env
-
-# Python
-__pycache__/
+.env.*
+.git
+.github
 venv/
-.pytest_cache/
-*.pyc
-
-# Node
+__pycache__/
 node_modules/
-dist/
-
-# Docker
-.docker/

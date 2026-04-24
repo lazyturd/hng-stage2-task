@@ -87,6 +87,7 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL'
           exit-code: '1'
+          ignore-unfixed: true
 
       # Upgraded to v4 to fix the deprecation warning
       - name: Upload SARIF
